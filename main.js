@@ -152,6 +152,19 @@ function isFacebookRedirect(url) {
   return null;
 }
 
+// Paths that must stay in-app (login/auth flow + messenger)
+const IN_APP_PATHS = [
+  '/messages',
+  '/login',
+  '/checkpoint',
+  '/two_step_verification',
+  '/recover',
+  '/cookie/consent',
+  '/privacy/consent',
+  '/oauth',
+  '/dialog/oauth',
+];
+
 // Check if a URL should open externally (not part of Messenger UI)
 function shouldOpenExternally(url) {
   const redirectTarget = isFacebookRedirect(url);
@@ -159,13 +172,13 @@ function shouldOpenExternally(url) {
 
   if (!isAllowedDomain(url)) return url;
 
-  // Facebook.com pages that aren't messenger should open in browser
+  // Facebook.com pages that aren't messenger or auth should open in browser
   try {
     const parsed = new URL(url);
     if (
       (parsed.hostname === 'www.facebook.com' ||
         parsed.hostname === 'facebook.com') &&
-      !parsed.pathname.startsWith('/messages')
+      !IN_APP_PATHS.some((p) => parsed.pathname.startsWith(p))
     ) {
       return url;
     }
