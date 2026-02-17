@@ -18,6 +18,7 @@
       "icon": "assets/icon.png",
       "darkModeSupport": true,
       "hardenedRuntime": true,
+      "notarize": true,
       "entitlements": "entitlements.plist",
       "entitlementsInherit": "entitlements.plist",
       "target": [

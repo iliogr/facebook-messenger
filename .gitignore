@@ -4,5 +4,6 @@ dist/
 *.exe
 *.blockmap
 .DS_Store
+.env
 .playwright-mcp/
 .claude/
