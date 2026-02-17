@@ -226,7 +226,9 @@ if (document.readyState === 'loading') {
 }
 
 function init() {
-  injectTitleBarCSS();
+  if (process.platform === 'darwin') {
+    injectTitleBarCSS();
+  }
   overrideNotifications();
   watchUnreadCount();
 }

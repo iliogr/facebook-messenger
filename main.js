@@ -152,19 +152,6 @@ function isFacebookRedirect(url) {
   return null;
 }
 
-// Paths that must stay in-app (login/auth flow + messenger)
-const IN_APP_PATHS = [
-  '/messages',
-  '/login',
-  '/checkpoint',
-  '/two_step_verification',
-  '/recover',
-  '/cookie/consent',
-  '/privacy/consent',
-  '/oauth',
-  '/dialog/oauth',
-];
-
 // Check if a URL should open externally (not part of Messenger UI)
 function shouldOpenExternally(url) {
   const redirectTarget = isFacebookRedirect(url);
@@ -172,15 +159,21 @@ function shouldOpenExternally(url) {
 
   if (!isAllowedDomain(url)) return url;
 
-  // Facebook.com pages that aren't messenger or auth should open in browser
+  // Only redirect facebook.com pages to the browser if we're already
+  // logged in and on /messages. During auth flows (login, 2FA, verification)
+  // everything must stay in-app so the session completes properly.
   try {
     const parsed = new URL(url);
     if (
       (parsed.hostname === 'www.facebook.com' ||
         parsed.hostname === 'facebook.com') &&
-      !IN_APP_PATHS.some((p) => parsed.pathname.startsWith(p))
+      !parsed.pathname.startsWith('/messages')
     ) {
-      return url;
+      const currentUrl = mainWindow && !mainWindow.isDestroyed()
+        ? mainWindow.webContents.getURL()
+        : '';
+      const onMessenger = currentUrl.includes('/messages');
+      if (onMessenger) return url;
     }
   } catch {}
 
@@ -200,7 +193,7 @@ function createWindow() {
     y: state.y,
     minWidth: 400,
     minHeight: 300,
-    titleBarStyle: 'hiddenInset',
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     backgroundColor: darkMode ? '#000000' : '#FFFFFF',
     show: false,
     webPreferences: {
