@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0078FF;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#00C6FF;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="bubbleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0078FF;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#0099FF;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#00C6FF;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded square background -->
+  <rect x="0" y="0" width="1024" height="1024" rx="220" ry="220" fill="url(#bgGrad)" />
+
+  <!-- Chat bubble shape -->
+  <path d="
+    M 512 160
+    C 314 160 152 298 152 472
+    C 152 564 196 648 264 708
+    L 264 820
+    C 264 838 284 848 298 838
+    L 396 764
+    C 432 774 470 780 512 780
+    C 710 780 872 642 872 468
+    C 872 298 710 160 512 160
+    Z
+  " fill="white" opacity="0.95" />
+
+  <!-- Lightning bolt icon inside the bubble -->
+  <path d="
+    M 540 300
+    L 440 500
+    L 500 500
+    L 470 670
+    L 600 440
+    L 530 440
+    L 570 300
+    Z
+  " fill="url(#bubbleGrad)" />
+</svg>

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 22" width="22" height="22">
+  <!-- macOS tray template: black shape on transparent background -->
+  <!-- The system will colorize this appropriately for light/dark mode -->
+  <path d="
+    M 11 2
+    C 6.03 2 2 5.58 2 10
+    C 2 12.05 2.88 13.9 4.34 15.25
+    L 4.34 18.5
+    C 4.34 18.95 4.84 19.2 5.2 18.95
+    L 7.5 17.2
+    C 8.6 17.55 9.78 17.75 11 17.75
+    C 15.97 17.75 20 14.17 20 9.75
+    C 20 5.58 15.97 2 11 2
+    Z
+  " fill="black" />
+</svg>
