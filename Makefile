@@ -1,5 +1,8 @@
 .PHONY: install start dev build build-mac build-win build-all clean \
-       release-patch release-minor release-major version-patch version-minor version-major
+       release-patch release-minor release-major version-patch version-minor version-major \
+       publish push
+
+VERSION = $(shell node -p 'require("./package.json").version')
 
 # Install dependencies
 install:
@@ -37,13 +40,26 @@ version-major:
 
 # Bump version + build all platforms
 release-patch: version-patch build-all
-	@echo "Released $$(node -p 'require("./package.json").version')"
+	@echo "Built v$(VERSION)"
 
 release-minor: version-minor build-all
-	@echo "Released $$(node -p 'require("./package.json").version')"
+	@echo "Built v$(VERSION)"
 
 release-major: version-major build-all
-	@echo "Released $$(node -p 'require("./package.json").version')"
+	@echo "Built v$(VERSION)"
+
+# Push commits + tags to GitHub
+push:
+	git push origin main --tags
+
+# Create a GitHub release with binaries (run after release-* and push)
+publish: push
+	gh release create v$(VERSION) \
+		"dist/Messenger-$(VERSION)-universal.dmg#Messenger macOS (Universal - Intel + Apple Silicon)" \
+		"dist/Messenger Setup $(VERSION).exe#Messenger Windows (x64 Installer)" \
+		--title "Messenger Desktop v$(VERSION)" \
+		--generate-notes
+	@echo "Published https://github.com/iliogr/facebook-messenger/releases/tag/v$(VERSION)"
 
 # Remove build artifacts
 clean:
