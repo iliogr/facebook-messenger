@@ -1,6 +1,7 @@
 const {
   app,
   BrowserWindow,
+  BrowserView,
   Menu,
   Tray,
   shell,
@@ -8,7 +9,6 @@ const {
   nativeTheme,
   Notification,
   session,
-  dialog,
   nativeImage,
   screen,
 } = require('electron');
@@ -17,6 +17,7 @@ const fs = require('fs');
 
 // Keep references to prevent garbage collection
 let mainWindow = null;
+let mainView = null;
 let tray = null;
 let isQuitting = false;
 let windowState = {};
@@ -24,6 +25,7 @@ let saveTimeout = null;
 
 const MESSENGER_URL = 'https://www.facebook.com/messages/';
 const USER_AGENT = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${process.versions.chrome} Safari/537.36`;
+const TITLE_BAR_HEIGHT = process.platform === 'darwin' ? 40 : 0;
 
 // Domains allowed for navigation
 const ALLOWED_DOMAINS = [
@@ -169,8 +171,8 @@ function shouldOpenExternally(url) {
         parsed.hostname === 'facebook.com') &&
       !parsed.pathname.startsWith('/messages')
     ) {
-      const currentUrl = mainWindow && !mainWindow.isDestroyed()
-        ? mainWindow.webContents.getURL()
+      const currentUrl = mainView
+        ? mainView.webContents.getURL()
         : '';
       const onMessenger = currentUrl.includes('/messages');
       if (onMessenger) return url;
@@ -178,6 +180,19 @@ function shouldOpenExternally(url) {
   } catch {}
 
   return null;
+}
+
+// --- Update BrowserView bounds to fill window below title bar ---
+
+function updateViewBounds() {
+  if (!mainWindow || mainWindow.isDestroyed() || !mainView) return;
+  const { width, height } = mainWindow.getContentBounds();
+  mainView.setBounds({
+    x: 0,
+    y: TITLE_BAR_HEIGHT,
+    width,
+    height: Math.max(0, height - TITLE_BAR_HEIGHT),
+  });
 }
 
 // --- Create Main Window ---
@@ -196,6 +211,9 @@ function createWindow() {
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     backgroundColor: darkMode ? '#000000' : '#FFFFFF',
     show: false,
+  });
+
+  mainView = new BrowserView({
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -205,11 +223,17 @@ function createWindow() {
     },
   });
 
+  mainWindow.setBrowserView(mainView);
+  updateViewBounds();
+  mainView.setAutoResize({ width: true, height: true });
+
   if (state.isMaximized) mainWindow.maximize();
   if (state.isFullScreen) mainWindow.setFullScreen(true);
 
+  mainWindow.on('resize', updateViewBounds);
+
   // Set user agent
-  mainWindow.webContents.setUserAgent(USER_AGENT);
+  mainView.webContents.setUserAgent(USER_AGENT);
 
   // Show window when ready
   mainWindow.once('ready-to-show', () => {
@@ -217,21 +241,7 @@ function createWindow() {
   });
 
   // Load Messenger
-  mainWindow.loadURL(MESSENGER_URL);
-
-  // Offset page content below the traffic lights.
-  // Using transform so fixed-position elements (Facebook's nav bar) also shift.
-  // cssOrigin:'user' makes !important beat any website stylesheet.
-  mainWindow.webContents.on('dom-ready', () => {
-    mainWindow.webContents.insertCSS(
-      `body {
-        transform: translateY(40px) !important;
-        height: calc(100vh - 40px) !important;
-        overflow: hidden !important;
-      }`,
-      { cssOrigin: 'user' }
-    );
-  });
+  mainView.webContents.loadURL(MESSENGER_URL);
 
   // --- Permission Handling ---
 
@@ -242,7 +252,6 @@ function createWindow() {
     if (isTrustedDomain(url) && ALLOWED_PERMISSIONS.includes(permission)) {
       callback(true);
     } else if (isAllowedDomain(url) && permission === 'notifications') {
-      // Allow notifications from broader Facebook domains
       callback(true);
     } else {
       callback(false);
@@ -263,7 +272,7 @@ function createWindow() {
 
   // --- Navigation Control ---
 
-  mainWindow.webContents.on('will-navigate', (event, url) => {
+  mainView.webContents.on('will-navigate', (event, url) => {
     const externalUrl = shouldOpenExternally(url);
     if (externalUrl) {
       event.preventDefault();
@@ -272,12 +281,12 @@ function createWindow() {
   });
 
   // Handle new windows (target="_blank", window.open, etc.)
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  mainView.webContents.setWindowOpenHandler(({ url }) => {
     const externalUrl = shouldOpenExternally(url);
     if (externalUrl) {
       shell.openExternal(externalUrl);
     } else {
-      mainWindow.loadURL(url);
+      mainView.webContents.loadURL(url);
     }
     return { action: 'deny' };
   });
@@ -366,11 +375,11 @@ ipcMain.on('update-badge', (event, count) => {
 });
 
 ipcMain.on('find-in-page', (event, text) => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
+  if (mainView) {
     if (text) {
-      mainWindow.webContents.findInPage(text);
+      mainView.webContents.findInPage(text);
     } else {
-      mainWindow.webContents.stopFindInPage('clearSelection');
+      mainView.webContents.stopFindInPage('clearSelection');
     }
   }
 });
@@ -398,9 +407,9 @@ function buildMenu() {
           label: 'Preferences...',
           accelerator: 'CmdOrCtrl+,',
           click: () => {
-            if (mainWindow) {
+            if (mainWindow && mainView) {
               mainWindow.show();
-              mainWindow.webContents.loadURL(
+              mainView.webContents.loadURL(
                 'https://www.facebook.com/messages/preferences'
               );
             }
@@ -430,16 +439,52 @@ function buildMenu() {
     {
       label: 'View',
       submenu: [
-        { role: 'reload' },
-        { role: 'forceReload' },
+        {
+          label: 'Reload',
+          accelerator: 'CmdOrCtrl+R',
+          click: () => { if (mainView) mainView.webContents.reload(); },
+        },
+        {
+          label: 'Force Reload',
+          accelerator: 'CmdOrCtrl+Shift+R',
+          click: () => { if (mainView) mainView.webContents.reloadIgnoringCache(); },
+        },
         { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
+        {
+          label: 'Actual Size',
+          accelerator: 'CmdOrCtrl+0',
+          click: () => { if (mainView) mainView.webContents.setZoomLevel(0); },
+        },
+        {
+          label: 'Zoom In',
+          accelerator: 'CmdOrCtrl+=',
+          click: () => {
+            if (mainView) {
+              mainView.webContents.setZoomLevel(
+                mainView.webContents.getZoomLevel() + 0.5
+              );
+            }
+          },
+        },
+        {
+          label: 'Zoom Out',
+          accelerator: 'CmdOrCtrl+-',
+          click: () => {
+            if (mainView) {
+              mainView.webContents.setZoomLevel(
+                mainView.webContents.getZoomLevel() - 0.5
+              );
+            }
+          },
+        },
         { type: 'separator' },
         { role: 'togglefullscreen' },
         { type: 'separator' },
-        { role: 'toggleDevTools' },
+        {
+          label: 'Toggle Developer Tools',
+          accelerator: process.platform === 'darwin' ? 'Alt+Cmd+I' : 'Ctrl+Shift+I',
+          click: () => { if (mainView) mainView.webContents.toggleDevTools(); },
+        },
       ],
     },
     {
@@ -449,8 +494,8 @@ function buildMenu() {
           label: 'Back',
           accelerator: 'CmdOrCtrl+[',
           click: () => {
-            if (mainWindow && mainWindow.webContents.canGoBack()) {
-              mainWindow.webContents.goBack();
+            if (mainView && mainView.webContents.canGoBack()) {
+              mainView.webContents.goBack();
             }
           },
         },
@@ -458,8 +503,8 @@ function buildMenu() {
           label: 'Forward',
           accelerator: 'CmdOrCtrl+]',
           click: () => {
-            if (mainWindow && mainWindow.webContents.canGoForward()) {
-              mainWindow.webContents.goForward();
+            if (mainView && mainView.webContents.canGoForward()) {
+              mainView.webContents.goForward();
             }
           },
         },

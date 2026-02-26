@@ -1,23 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-// --- Inject draggable title bar region ---
-function injectTitleBarCSS() {
-  const style = document.createElement('style');
-  style.textContent = `
-    html::before {
-      content: '';
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 40px;
-      -webkit-app-region: drag;
-      z-index: 99999;
-    }
-  `;
-  document.head.appendChild(style);
-}
-
 // --- Notification Override ---
 function overrideNotifications() {
   class CustomNotification {
@@ -230,9 +212,6 @@ if (document.readyState === 'loading') {
 }
 
 function init() {
-  if (process.platform === 'darwin') {
-    injectTitleBarCSS();
-  }
   overrideNotifications();
   watchUnreadCount();
 }
