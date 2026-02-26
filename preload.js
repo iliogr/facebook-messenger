@@ -1,10 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-// --- Inject CSS for hidden title bar padding ---
+// --- Inject draggable title bar region ---
 function injectTitleBarCSS() {
   const style = document.createElement('style');
   style.textContent = `
-    /* Draggable title bar in the 40px gap above content */
     html::before {
       content: '';
       position: fixed;
@@ -14,15 +13,6 @@ function injectTitleBarCSS() {
       height: 40px;
       -webkit-app-region: drag;
       z-index: 99999;
-    }
-    /* Pin the body below the title bar area, filling the rest of the viewport */
-    body {
-      position: fixed !important;
-      top: 40px !important;
-      left: 0 !important;
-      right: 0 !important;
-      bottom: 0 !important;
-      overflow: hidden !important;
     }
   `;
   document.head.appendChild(style);
@@ -91,7 +81,7 @@ function overrideNotifications() {
   window.Notification = CustomNotification;
 }
 
-// --- Unread Badge Detection ---
+// --- Unread Badge Detection (messages only, excludes notification bell) ---
 function watchUnreadCount() {
   let lastCount = 0;
   let lastTitleEl = null;
@@ -117,21 +107,38 @@ function watchUnreadCount() {
     return match ? parseInt(match[1], 10) : 0;
   }
 
+  // Check if an element is inside a notification/bell area (not chat messages)
+  function isInsideNotificationArea(el) {
+    let node = el;
+    for (let i = 0; i < 15 && node; i++) {
+      if (node.getAttribute) {
+        const label = (node.getAttribute('aria-label') || '').toLowerCase();
+        const testId = (node.getAttribute('data-testid') || '').toLowerCase();
+        if (
+          label.includes('notification') ||
+          testId.includes('notification')
+        ) {
+          return true;
+        }
+      }
+      node = node.parentElement;
+    }
+    return false;
+  }
+
   function getCountFromDOM() {
-    // Strategy 1: Look for aria-label with "unread" on badge-like elements
+    // Strategy 1: aria-label with "unread" — only message-related elements
     const ariaEls = document.querySelectorAll('[aria-label*="unread" i]');
     for (const el of ariaEls) {
+      if (isInsideNotificationArea(el)) continue;
       const match = el.getAttribute('aria-label').match(/(\d+)\s*unread/i);
       if (match) return parseInt(match[1], 10);
     }
 
-    // Strategy 2: Look for the Messenger notification jewel / badge counter
-    // Messenger uses a small red circle with a number inside near the chat list
+    // Strategy 2: Badge counter elements, excluding notification bell area
     const selectors = [
-      // Badge-like spans inside navigation or header
       'nav span[data-testid]',
       '[role="navigation"] span',
-      // Common badge patterns - small elements with just a number
       'span[class*="badge"]',
       'span[class*="jewel"]',
       'span[class*="count"]',
@@ -140,11 +147,10 @@ function watchUnreadCount() {
     for (const sel of selectors) {
       const els = document.querySelectorAll(sel);
       for (const el of els) {
+        if (isInsideNotificationArea(el)) continue;
         const text = el.textContent.trim();
-        // Must be a standalone number (1-4 digits) in a small element
         if (/^\d{1,4}$/.test(text)) {
           const rect = el.getBoundingClientRect();
-          // Badge elements are typically small (under 40px)
           if (rect.width > 0 && rect.width < 40 && rect.height < 40) {
             return parseInt(text, 10);
           }
@@ -152,29 +158,17 @@ function watchUnreadCount() {
       }
     }
 
-    // Strategy 3: Check the favicon link for a badge indicator
-    const favicons = document.querySelectorAll('link[rel*="icon"]');
-    for (const fav of favicons) {
-      const href = fav.getAttribute('href') || '';
-      // Messenger sometimes encodes badge state in a data URI favicon
-      if (href.startsWith('data:') && href.length > 200) {
-        // A data URI favicon that's significantly larger than the default
-        // likely has a badge overlay drawn on it — treat as "has unread"
-        // We can't parse the exact count, so return 1 as indicator
-        // But only if we don't already have a count from other methods
-      }
-    }
-
     return 0;
   }
 
   function detectUnreadCount() {
-    // Try title first (most reliable when available)
+    // Try title first (cheap) then refine with DOM if needed
     let count = getCountFromTitle();
 
-    // Fall back to DOM scanning
-    if (count === 0) {
-      count = getCountFromDOM();
+    // Use DOM scanning to get a message-specific count (excludes bell badges)
+    const domCount = getCountFromDOM();
+    if (domCount > 0) {
+      count = domCount;
     }
 
     if (count !== lastCount) {
@@ -183,15 +177,25 @@ function watchUnreadCount() {
     }
   }
 
+  // Debounce DOM-triggered detection to avoid thrashing during page load
+  let detectTimeout = null;
+  function debouncedDetect() {
+    if (detectTimeout) return;
+    detectTimeout = setTimeout(() => {
+      detectTimeout = null;
+      detectUnreadCount();
+    }, 300);
+  }
+
   // Watch for title element being added/replaced in head
   const headObserver = new MutationObserver(() => {
     observeTitle();
-    detectUnreadCount();
+    debouncedDetect();
   });
   headObserver.observe(document.head, { childList: true });
 
   // Watch for broad DOM changes (catches badge elements appearing/updating)
-  const bodyObserver = new MutationObserver(detectUnreadCount);
+  const bodyObserver = new MutationObserver(debouncedDetect);
   const startBodyObserver = () => {
     if (document.body) {
       bodyObserver.observe(document.body, {

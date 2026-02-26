@@ -69,7 +69,7 @@ function loadWindowState() {
   } catch (e) {
     // Ignore corrupted state
   }
-  return { width: 1200, height: 800 };
+  return { width: 1200, height: 920 };
 }
 
 function validateWindowPosition(state) {
@@ -219,6 +219,20 @@ function createWindow() {
   // Load Messenger
   mainWindow.loadURL(MESSENGER_URL);
 
+  // Offset page content below the traffic lights.
+  // Using transform so fixed-position elements (Facebook's nav bar) also shift.
+  // cssOrigin:'user' makes !important beat any website stylesheet.
+  mainWindow.webContents.on('dom-ready', () => {
+    mainWindow.webContents.insertCSS(
+      `body {
+        transform: translateY(40px) !important;
+        height: calc(100vh - 40px) !important;
+        overflow: hidden !important;
+      }`,
+      { cssOrigin: 'user' }
+    );
+  });
+
   // --- Permission Handling ---
 
   const ses = session.fromPartition('persist:messenger');
@@ -347,15 +361,7 @@ ipcMain.on('show-notification', (event, { title, body, icon }) => {
 
 ipcMain.on('update-badge', (event, count) => {
   if (app.dock) {
-    if (count > 0) {
-      app.dock.setBadge(count.toString());
-      // Bounce dock icon if window is not focused
-      if (mainWindow && !mainWindow.isFocused()) {
-        app.dock.bounce('informational');
-      }
-    } else {
-      app.dock.setBadge('');
-    }
+    app.dock.setBadge(count > 0 ? count.toString() : '');
   }
 });
 
