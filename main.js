@@ -14,6 +14,7 @@ const {
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const zlib = require('zlib');
 
 // Keep references to prevent garbage collection
 let mainWindow = null;
@@ -26,6 +27,62 @@ let saveTimeout = null;
 const MESSENGER_URL = 'https://www.facebook.com/messages/';
 const USER_AGENT = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${process.versions.chrome} Safari/537.36`;
 const TITLE_BAR_HEIGHT = process.platform === 'darwin' ? 40 : 0;
+
+// --- Windows Badge Icon (red dot for taskbar overlay) ---
+
+let badgeIcon = null;
+
+function createBadgeIcon() {
+  const s = 16;
+  const rowBytes = 1 + s * 4;
+  const raw = Buffer.alloc(s * rowBytes);
+  for (let y = 0; y < s; y++) {
+    raw[y * rowBytes] = 0; // PNG filter: None
+    for (let x = 0; x < s; x++) {
+      const i = y * rowBytes + 1 + x * 4;
+      const dx = x - 7.5, dy = y - 7.5;
+      if (dx * dx + dy * dy <= 56.25) {
+        raw[i] = 228; raw[i + 1] = 30; raw[i + 2] = 63; raw[i + 3] = 255;
+      }
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(s, 0);
+  ihdr.writeUInt32BE(s, 4);
+  ihdr[8] = 8; ihdr[9] = 6; // 8-bit RGBA
+  const png = Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', zlib.deflateSync(raw)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+  return nativeImage.createFromBuffer(png);
+}
+
+function pngChunk(type, data) {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length);
+  const t = Buffer.from(type, 'ascii');
+  const payload = Buffer.concat([t, data]);
+  const c = Buffer.alloc(4);
+  c.writeUInt32BE(crc32(payload));
+  return Buffer.concat([len, payload, c]);
+}
+
+function crc32(buf) {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    crc = crc32Table[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+const crc32Table = new Uint32Array(256);
+for (let i = 0; i < 256; i++) {
+  let c = i;
+  for (let j = 0; j < 8; j++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  crc32Table[i] = c;
+}
 
 // Domains allowed for navigation
 const ALLOWED_DOMAINS = [
@@ -369,8 +426,21 @@ ipcMain.on('show-notification', (event, { title, body, icon }) => {
 });
 
 ipcMain.on('update-badge', (event, count) => {
+  // macOS: dock badge
   if (app.dock) {
     app.dock.setBadge(count > 0 ? count.toString() : '');
+  }
+
+  // Windows: taskbar overlay icon (red dot badge)
+  if (process.platform === 'win32' && mainWindow && !mainWindow.isDestroyed()) {
+    if (count > 0) {
+      mainWindow.setOverlayIcon(badgeIcon, `${count} unread messages`);
+      if (!mainWindow.isFocused()) {
+        mainWindow.flashFrame(true);
+      }
+    } else {
+      mainWindow.setOverlayIcon(null, '');
+    }
   }
 });
 
@@ -592,6 +662,9 @@ function createTray() {
 // --- App Lifecycle ---
 
 app.on('ready', () => {
+  if (process.platform === 'win32') {
+    badgeIcon = createBadgeIcon();
+  }
   buildMenu();
   createWindow();
   createTray();
