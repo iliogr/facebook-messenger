@@ -665,41 +665,54 @@ function createTray() {
 
 // --- App Lifecycle ---
 
-app.on('ready', () => {
-  if (process.platform === 'win32') {
-    try {
-      badgeIcon = createBadgeIcon();
-    } catch (e) {
-      // Badge overlay won't work but app still launches
+// Single instance lock: if a second instance is launched, focus the existing window
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
     }
-  }
-  buildMenu();
-  createWindow();
-  createTray();
-});
+  });
 
-app.on('before-quit', (event) => {
-  saveWindowState();
-  if (!isQuitting) {
-    // Flush session data to disk before quitting so cookies/login persist
-    isQuitting = true;
-    event.preventDefault();
-    session.fromPartition('persist:messenger').flushStorageData().then(() => {
+  app.on('ready', () => {
+    if (process.platform === 'win32') {
+      try {
+        badgeIcon = createBadgeIcon();
+      } catch (e) {
+        // Badge overlay won't work but app still launches
+      }
+    }
+    buildMenu();
+    createWindow();
+    createTray();
+  });
+  app.on('before-quit', (event) => {
+    saveWindowState();
+    if (!isQuitting) {
+      // Flush session data to disk before quitting so cookies/login persist
+      isQuitting = true;
+      event.preventDefault();
+      session.fromPartition('persist:messenger').flushStorageData().then(() => {
+        app.quit();
+      });
+      return;
+    }
+  });
+
+  app.on('activate', () => {
+    if (mainWindow) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') {
       app.quit();
-    });
-    return;
-  }
-});
-
-app.on('activate', () => {
-  if (mainWindow) {
-    mainWindow.show();
-    mainWindow.focus();
-  }
-});
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});
+    }
+  });
+}
