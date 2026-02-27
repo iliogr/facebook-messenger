@@ -296,9 +296,13 @@ function createWindow() {
   mainView.webContents.loadURL(MESSENGER_URL);
 
   // Show window once the BrowserView content is ready
-  mainView.webContents.once('dom-ready', () => {
-    mainWindow.show();
-  });
+  function showOnce() {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      mainWindow.show();
+    }
+  }
+  mainView.webContents.once('dom-ready', showOnce);
+  setTimeout(showOnce, 5000); // fallback if dom-ready doesn't fire
 
   // --- Permission Handling ---
 
@@ -674,9 +678,17 @@ app.on('ready', () => {
   createTray();
 });
 
-app.on('before-quit', () => {
-  isQuitting = true;
+app.on('before-quit', (event) => {
   saveWindowState();
+  if (!isQuitting) {
+    // Flush session data to disk before quitting so cookies/login persist
+    isQuitting = true;
+    event.preventDefault();
+    session.fromPartition('persist:messenger').flushStorageData().then(() => {
+      app.quit();
+    });
+    return;
+  }
 });
 
 app.on('activate', () => {
