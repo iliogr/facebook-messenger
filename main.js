@@ -292,13 +292,13 @@ function createWindow() {
   // Set user agent
   mainView.webContents.setUserAgent(USER_AGENT);
 
-  // Show window when ready
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
-  });
-
   // Load Messenger
   mainView.webContents.loadURL(MESSENGER_URL);
+
+  // Show window once the BrowserView content is ready
+  mainView.webContents.once('dom-ready', () => {
+    mainWindow.show();
+  });
 
   // --- Permission Handling ---
 
@@ -663,7 +663,11 @@ function createTray() {
 
 app.on('ready', () => {
   if (process.platform === 'win32') {
-    badgeIcon = createBadgeIcon();
+    try {
+      badgeIcon = createBadgeIcon();
+    } catch (e) {
+      // Badge overlay won't work but app still launches
+    }
   }
   buildMenu();
   createWindow();
