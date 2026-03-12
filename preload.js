@@ -146,8 +146,11 @@ function watchUnreadCount() {
   }
 
   function detectUnreadCount() {
-    // Only use DOM scanning — title count includes notification bell and is unreliable
-    let count = getCountFromDOM();
+    // Title count reflects unread message threads (not notification bell)
+    const titleCount = getCountFromTitle();
+    // DOM scanning can refine, but only trust it if it finds something
+    const domCount = getCountFromDOM();
+    let count = domCount > 0 ? domCount : titleCount;
 
     // Stabilize: require multiple consecutive zero readings before clearing badge
     // This prevents flicker from transient DOM states
