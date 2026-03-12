@@ -429,7 +429,11 @@ ipcMain.on('show-notification', (event, { title, body, icon }) => {
   notif.show();
 });
 
+let lastBadgeCount = 0;
 ipcMain.on('update-badge', (event, count) => {
+  const prevCount = lastBadgeCount;
+  lastBadgeCount = count;
+
   // macOS: dock badge
   if (app.dock) {
     app.dock.setBadge(count > 0 ? count.toString() : '');
@@ -439,11 +443,13 @@ ipcMain.on('update-badge', (event, count) => {
   if (process.platform === 'win32' && mainWindow && !mainWindow.isDestroyed()) {
     if (count > 0) {
       mainWindow.setOverlayIcon(badgeIcon, `${count} unread messages`);
-      if (!mainWindow.isFocused()) {
+      // Only flash when count increases (new messages), not on every update
+      if (!mainWindow.isFocused() && count > prevCount) {
         mainWindow.flashFrame(true);
       }
     } else {
       mainWindow.setOverlayIcon(null, '');
+      mainWindow.flashFrame(false);
     }
   }
 });

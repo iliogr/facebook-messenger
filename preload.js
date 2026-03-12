@@ -67,6 +67,8 @@ function overrideNotifications() {
 function watchUnreadCount() {
   let lastCount = 0;
   let lastTitleEl = null;
+  let zeroStreak = 0;
+  const ZERO_THRESHOLD = 3; // require 3 consecutive zero readings before clearing badge
 
   const titleObserver = new MutationObserver(detectUnreadCount);
 
@@ -144,13 +146,16 @@ function watchUnreadCount() {
   }
 
   function detectUnreadCount() {
-    // Try title first (cheap) then refine with DOM if needed
-    let count = getCountFromTitle();
+    // Only use DOM scanning — title count includes notification bell and is unreliable
+    let count = getCountFromDOM();
 
-    // Use DOM scanning to get a message-specific count (excludes bell badges)
-    const domCount = getCountFromDOM();
-    if (domCount > 0) {
-      count = domCount;
+    // Stabilize: require multiple consecutive zero readings before clearing badge
+    // This prevents flicker from transient DOM states
+    if (count === 0 && lastCount > 0) {
+      zeroStreak++;
+      if (zeroStreak < ZERO_THRESHOLD) return;
+    } else {
+      zeroStreak = 0;
     }
 
     if (count !== lastCount) {
