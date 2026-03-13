@@ -2,65 +2,65 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 // --- Notification Override ---
 function overrideNotifications() {
-  class CustomNotification {
-    constructor(title, options = {}) {
-      this._listeners = { click: [], close: [], error: [], show: [] };
-
-      // Send to main process for native notification
+  // With contextIsolation, we can't directly override window.Notification in the
+  // main world from the preload. Instead, inject a script into the main world that
+  // overrides Notification and communicates back via window.postMessage.
+  window.addEventListener('message', (event) => {
+    if (event.data && event.data.type === '__messenger_notification') {
       ipcRenderer.send('show-notification', {
-        title,
-        body: options.body || '',
-        icon: options.icon || '',
+        title: event.data.title,
+        body: event.data.body,
+        icon: event.data.icon,
       });
-
-      this.title = title;
-      this.body = options.body || '';
-      this.icon = options.icon || '';
-      this.onclick = null;
-      this.onclose = null;
-      this.onerror = null;
-      this.onshow = null;
     }
+  });
 
-    close() {}
-
-    addEventListener(type, listener) {
-      if (this._listeners[type]) {
-        this._listeners[type].push(listener);
+  const script = document.createElement('script');
+  script.textContent = `
+    (function() {
+      class CustomNotification {
+        constructor(title, options) {
+          options = options || {};
+          this._listeners = { click: [], close: [], error: [], show: [] };
+          this.title = title;
+          this.body = options.body || '';
+          this.icon = options.icon || '';
+          this.onclick = null;
+          this.onclose = null;
+          this.onerror = null;
+          this.onshow = null;
+          window.postMessage({
+            type: '__messenger_notification',
+            title: title,
+            body: options.body || '',
+            icon: options.icon || ''
+          }, '*');
+        }
+        close() {}
+        addEventListener(type, listener) {
+          if (this._listeners[type]) this._listeners[type].push(listener);
+        }
+        removeEventListener(type, listener) {
+          if (this._listeners[type]) this._listeners[type] = this._listeners[type].filter(function(l) { return l !== listener; });
+        }
+        dispatchEvent(event) {
+          var type = event.type;
+          if (this._listeners[type]) this._listeners[type].forEach(function(l) { l(event); });
+          if (this['on' + type]) this['on' + type](event);
+          return true;
+        }
+        static get permission() { return 'granted'; }
+        static requestPermission(callback) {
+          var result = Promise.resolve('granted');
+          if (callback) callback('granted');
+          return result;
+        }
       }
-    }
-
-    removeEventListener(type, listener) {
-      if (this._listeners[type]) {
-        this._listeners[type] = this._listeners[type].filter(
-          (l) => l !== listener
-        );
-      }
-    }
-
-    dispatchEvent(event) {
-      const type = event.type;
-      if (this._listeners[type]) {
-        this._listeners[type].forEach((l) => l(event));
-      }
-      if (this['on' + type]) {
-        this['on' + type](event);
-      }
-      return true;
-    }
-
-    static get permission() {
-      return 'granted';
-    }
-
-    static requestPermission(callback) {
-      const result = Promise.resolve('granted');
-      if (callback) callback('granted');
-      return result;
-    }
-  }
-
-  window.Notification = CustomNotification;
+      window.Notification = CustomNotification;
+    })();
+  `;
+  document.documentElement.prepend(script);
+  script.remove();
 }
 
 // --- Unread Badge Detection (messages only, excludes notification bell) ---
@@ -212,14 +212,13 @@ contextBridge.exposeInMainWorld('messengerDesktop', {
   platform: process.platform,
 });
 
-// --- Initialize on DOM ready ---
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
-} else {
-  init();
-}
+// --- Initialize ---
+// Notification override must run ASAP, before Messenger's JS checks Notification API
+overrideNotifications();
 
-function init() {
-  overrideNotifications();
+// Badge detection needs DOM ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', watchUnreadCount);
+} else {
   watchUnreadCount();
 }
