@@ -102,7 +102,10 @@ function watchUnreadCount() {
   function getCountFromTitle() {
     const title = document.title || '';
     const match = title.match(/\((\d+)\)/);
-    return match ? parseInt(match[1], 10) : 0;
+    if (match) return parseInt(match[1], 10);
+    // If title is notification text (not base "Messenger" title), return -1 (unknown)
+    if (!/messenger/i.test(title)) return -1;
+    return 0;
   }
 
   function isInsideNotificationArea(el) {
@@ -158,6 +161,8 @@ function watchUnreadCount() {
 
   function detectUnreadCount() {
     const titleCount = getCountFromTitle();
+    // If title is in notification mode (-1), skip — don't report false zero
+    if (titleCount === -1) return;
     const domCount = getCountFromDOM();
     let count = domCount > 0 ? domCount : titleCount;
 

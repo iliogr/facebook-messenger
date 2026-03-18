@@ -327,9 +327,19 @@ function createWindow() {
       try {
         const count = await mainView.webContents.executeJavaScript(`
           (function() {
-            // Strategy 1: Title with count
-            var m = document.title.match(/\\((\\d+)\\)/);
+            var title = document.title || '';
+
+            // Strategy 1: Title with count — e.g. "(3) Messenger | Facebook"
+            var m = title.match(/\\((\\d+)\\)/);
             if (m) return parseInt(m[1], 10);
+
+            // If the title is notification text (e.g. "Lampros messaged f1 predictions")
+            // rather than the base "Messenger | Facebook", we can't determine unread count.
+            // Return -1 (unknown) so we don't falsely clear the badge.
+            var isBaseTitle = /messenger/i.test(title);
+            if (!isBaseTitle) return -1;
+
+            // Title is base "Messenger | Facebook" with no count — check DOM for unreads
 
             // Strategy 2: aria-label with unread count
             var els = document.querySelectorAll('[aria-label]');
@@ -340,23 +350,7 @@ function createWindow() {
               if (um) return parseInt(um[1], 10);
             }
 
-            // Strategy 3: Count conversation rows with unread indicators
-            var rows = document.querySelectorAll('[role="row"], [role="listitem"], [data-testid*="mwthreadlist"]');
-            if (rows.length === 0) rows = document.querySelectorAll('a[href*="/t/"]');
-            var unreadCount = 0;
-            for (var j = 0; j < rows.length; j++) {
-              var spans = rows[j].querySelectorAll('span');
-              for (var k = 0; k < spans.length; k++) {
-                var fw = window.getComputedStyle(spans[k]).fontWeight;
-                if ((fw === 'bold' || fw === '700' || parseInt(fw) >= 700) && spans[k].textContent.trim().length > 0 && spans[k].textContent.trim().length < 60) {
-                  unreadCount++;
-                  break;
-                }
-              }
-            }
-            if (unreadCount > 0) return unreadCount;
-
-            // Strategy 4: Check for blue dots (unread indicators)
+            // Strategy 3: Check for blue dots (unread indicators)
             var chatList = document.querySelector('[role="navigation"]') || document.body;
             var allEls = chatList.querySelectorAll('div, span');
             var dotCount = 0;
@@ -376,7 +370,7 @@ function createWindow() {
             return dotCount;
           })();
         `);
-        if (typeof count === 'number') {
+        if (typeof count === 'number' && count >= 0) {
           handleBadgeCount(count);
         }
       } catch (e) {
