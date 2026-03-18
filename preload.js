@@ -78,18 +78,14 @@ function overrideNotifications() {
   injectScript();
 }
 
-// --- Unread Badge Detection ---
-// With contextIsolation, preload runs in an isolated world. The DOM is shared,
-// but computed styles and some dynamic attributes may differ. We rely on the
-// main process executeJavaScript poll (main world) as the primary badge source.
-// The preload supplements with title observation which works in the isolated world.
+// --- Unread Badge Detection (messages only, excludes notification bell) ---
 function watchUnreadCount() {
   let lastCount = 0;
   let lastTitleEl = null;
   let zeroStreak = 0;
   const ZERO_THRESHOLD = 3;
 
-  const titleObserver = new MutationObserver(detectFromTitle);
+  const titleObserver = new MutationObserver(detectUnreadCount);
 
   function observeTitle() {
     const titleEl = document.querySelector('title');
@@ -103,42 +99,115 @@ function watchUnreadCount() {
     }
   }
 
-  function detectFromTitle() {
+  function getCountFromTitle() {
     const title = document.title || '';
     const match = title.match(/\((\d+)\)/);
-    const count = match ? parseInt(match[1], 10) : -1;
+    return match ? parseInt(match[1], 10) : 0;
+  }
 
-    // Only send title-based updates when we actually find a count
-    // The main process poll handles DOM-based detection more reliably
-    if (count > 0 && count !== lastCount) {
+  function isInsideNotificationArea(el) {
+    let node = el;
+    for (let i = 0; i < 15 && node; i++) {
+      if (node.getAttribute) {
+        const label = (node.getAttribute('aria-label') || '').toLowerCase();
+        const testId = (node.getAttribute('data-testid') || '').toLowerCase();
+        if (
+          label.includes('notification') ||
+          testId.includes('notification')
+        ) {
+          return true;
+        }
+      }
+      node = node.parentElement;
+    }
+    return false;
+  }
+
+  function getCountFromDOM() {
+    const ariaEls = document.querySelectorAll('[aria-label*="unread" i]');
+    for (const el of ariaEls) {
+      if (isInsideNotificationArea(el)) continue;
+      const match = el.getAttribute('aria-label').match(/(\d+)\s*unread/i);
+      if (match) return parseInt(match[1], 10);
+    }
+
+    const selectors = [
+      'nav span[data-testid]',
+      '[role="navigation"] span',
+      'span[class*="badge"]',
+      'span[class*="jewel"]',
+      'span[class*="count"]',
+      'div[class*="badge"]',
+    ];
+    for (const sel of selectors) {
+      const els = document.querySelectorAll(sel);
+      for (const el of els) {
+        if (isInsideNotificationArea(el)) continue;
+        const text = el.textContent.trim();
+        if (/^\d{1,4}$/.test(text)) {
+          const rect = el.getBoundingClientRect();
+          if (rect.width > 0 && rect.width < 40 && rect.height < 40) {
+            return parseInt(text, 10);
+          }
+        }
+      }
+    }
+
+    return 0;
+  }
+
+  function detectUnreadCount() {
+    const titleCount = getCountFromTitle();
+    const domCount = getCountFromDOM();
+    let count = domCount > 0 ? domCount : titleCount;
+
+    if (count === 0 && lastCount > 0) {
+      zeroStreak++;
+      if (zeroStreak < ZERO_THRESHOLD) return;
+    } else {
       zeroStreak = 0;
+    }
+
+    if (count !== lastCount) {
       lastCount = count;
       ipcRenderer.send('update-badge', count);
-    } else if (count === 0 || (count === -1 && lastCount > 0)) {
-      // Title lost the count — might mean zero unreads
-      zeroStreak++;
-      if (zeroStreak >= ZERO_THRESHOLD && lastCount > 0) {
-        lastCount = 0;
-        ipcRenderer.send('update-badge', 0);
-      }
     }
   }
 
-  // Watch for title element being added/replaced
+  let detectTimeout = null;
+  function debouncedDetect() {
+    if (detectTimeout) return;
+    detectTimeout = setTimeout(() => {
+      detectTimeout = null;
+      detectUnreadCount();
+    }, 300);
+  }
+
   const headObserver = new MutationObserver(() => {
     observeTitle();
-    detectFromTitle();
+    debouncedDetect();
   });
   if (document.head) {
     headObserver.observe(document.head, { childList: true });
   }
 
+  const bodyObserver = new MutationObserver(debouncedDetect);
+  const startBodyObserver = () => {
+    if (document.body) {
+      bodyObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
+    }
+  };
+
   observeTitle();
+  startBodyObserver();
 
-  // Poll title as fallback
-  setInterval(detectFromTitle, 2000);
+  setInterval(detectUnreadCount, 2000);
 
-  detectFromTitle();
+  detectUnreadCount();
 }
 
 // --- Expose limited API to renderer ---
