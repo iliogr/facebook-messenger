@@ -554,17 +554,17 @@ let badgeZeroStreak = 0;
 const BADGE_ZERO_THRESHOLD = 5;
 
 function handleBadgeCount(count) {
-  if (count === lastBadgeCount) return;
+  // Any non-zero reading resets the zero streak, even if count matches current badge.
+  // This prevents the streak from accumulating across alternating title changes.
+  if (count > 0) {
+    badgeZeroStreak = 0;
+    if (count === lastBadgeCount) return;
+  }
 
-  // Messenger alternates the title between "(N) Messenger" and notification text
-  // (e.g. "Lampros messaged f1 predictions"). When the notification text is showing,
-  // detection returns 0 even though there are unread messages.
-  // Require multiple consecutive zero readings before actually clearing the badge.
-  if (count === 0 && lastBadgeCount > 0) {
+  if (count === 0) {
+    if (lastBadgeCount === 0) return;
     badgeZeroStreak++;
     if (badgeZeroStreak < BADGE_ZERO_THRESHOLD) return;
-  } else {
-    badgeZeroStreak = 0;
   }
 
   const prevCount = lastBadgeCount;
