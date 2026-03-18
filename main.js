@@ -550,9 +550,24 @@ ipcMain.on('show-notification', (event, { title, body, icon }) => {
 });
 
 let lastBadgeCount = 0;
+let badgeZeroStreak = 0;
+const BADGE_ZERO_THRESHOLD = 5;
+
 function handleBadgeCount(count) {
+  if (count === lastBadgeCount) return;
+
+  // Messenger alternates the title between "(N) Messenger" and notification text
+  // (e.g. "Lampros messaged f1 predictions"). When the notification text is showing,
+  // detection returns 0 even though there are unread messages.
+  // Require multiple consecutive zero readings before actually clearing the badge.
+  if (count === 0 && lastBadgeCount > 0) {
+    badgeZeroStreak++;
+    if (badgeZeroStreak < BADGE_ZERO_THRESHOLD) return;
+  } else {
+    badgeZeroStreak = 0;
+  }
+
   const prevCount = lastBadgeCount;
-  if (count === prevCount) return;
   lastBadgeCount = count;
 
   debugLog(`[badge] setting badge count=${count} (prev=${prevCount})`);
