@@ -59,18 +59,37 @@ function overrideNotifications() {
       window.Notification = CustomNotification;
     })();
   `;
-  document.documentElement.prepend(script);
-  script.remove();
+  function injectScript() {
+    if (document.documentElement) {
+      document.documentElement.prepend(script);
+      script.remove();
+    } else {
+      // documentElement not yet available, wait for it
+      const mo = new MutationObserver(() => {
+        if (document.documentElement) {
+          mo.disconnect();
+          document.documentElement.prepend(script);
+          script.remove();
+        }
+      });
+      mo.observe(document, { childList: true });
+    }
+  }
+  injectScript();
 }
 
-// --- Unread Badge Detection (messages only, excludes notification bell) ---
+// --- Unread Badge Detection ---
+// With contextIsolation, preload runs in an isolated world. The DOM is shared,
+// but computed styles and some dynamic attributes may differ. We rely on the
+// main process executeJavaScript poll (main world) as the primary badge source.
+// The preload supplements with title observation which works in the isolated world.
 function watchUnreadCount() {
   let lastCount = 0;
   let lastTitleEl = null;
   let zeroStreak = 0;
-  const ZERO_THRESHOLD = 3; // require 3 consecutive zero readings before clearing badge
+  const ZERO_THRESHOLD = 3;
 
-  const titleObserver = new MutationObserver(detectUnreadCount);
+  const titleObserver = new MutationObserver(detectFromTitle);
 
   function observeTitle() {
     const titleEl = document.querySelector('title');
@@ -84,127 +103,42 @@ function watchUnreadCount() {
     }
   }
 
-  function getCountFromTitle() {
+  function detectFromTitle() {
     const title = document.title || '';
-    // Match patterns like "Messenger (3)", "(3) Messenger", "Чаты (3)", etc.
     const match = title.match(/\((\d+)\)/);
-    return match ? parseInt(match[1], 10) : 0;
-  }
+    const count = match ? parseInt(match[1], 10) : -1;
 
-  // Check if an element is inside a notification/bell area (not chat messages)
-  function isInsideNotificationArea(el) {
-    let node = el;
-    for (let i = 0; i < 15 && node; i++) {
-      if (node.getAttribute) {
-        const label = (node.getAttribute('aria-label') || '').toLowerCase();
-        const testId = (node.getAttribute('data-testid') || '').toLowerCase();
-        if (
-          label.includes('notification') ||
-          testId.includes('notification')
-        ) {
-          return true;
-        }
-      }
-      node = node.parentElement;
-    }
-    return false;
-  }
-
-  function getCountFromDOM() {
-    // Strategy 1: aria-label with "unread" — only message-related elements
-    const ariaEls = document.querySelectorAll('[aria-label*="unread" i]');
-    for (const el of ariaEls) {
-      if (isInsideNotificationArea(el)) continue;
-      const match = el.getAttribute('aria-label').match(/(\d+)\s*unread/i);
-      if (match) return parseInt(match[1], 10);
-    }
-
-    // Strategy 2: Badge counter elements, excluding notification bell area
-    const selectors = [
-      'nav span[data-testid]',
-      '[role="navigation"] span',
-      'span[class*="badge"]',
-      'span[class*="jewel"]',
-      'span[class*="count"]',
-      'div[class*="badge"]',
-    ];
-    for (const sel of selectors) {
-      const els = document.querySelectorAll(sel);
-      for (const el of els) {
-        if (isInsideNotificationArea(el)) continue;
-        const text = el.textContent.trim();
-        if (/^\d{1,4}$/.test(text)) {
-          const rect = el.getBoundingClientRect();
-          if (rect.width > 0 && rect.width < 40 && rect.height < 40) {
-            return parseInt(text, 10);
-          }
-        }
-      }
-    }
-
-    return 0;
-  }
-
-  function detectUnreadCount() {
-    // Title count reflects unread message threads (not notification bell)
-    const titleCount = getCountFromTitle();
-    // DOM scanning can refine, but only trust it if it finds something
-    const domCount = getCountFromDOM();
-    let count = domCount > 0 ? domCount : titleCount;
-
-    // Stabilize: require multiple consecutive zero readings before clearing badge
-    // This prevents flicker from transient DOM states
-    if (count === 0 && lastCount > 0) {
-      zeroStreak++;
-      if (zeroStreak < ZERO_THRESHOLD) return;
-    } else {
+    // Only send title-based updates when we actually find a count
+    // The main process poll handles DOM-based detection more reliably
+    if (count > 0 && count !== lastCount) {
       zeroStreak = 0;
-    }
-
-    if (count !== lastCount) {
       lastCount = count;
       ipcRenderer.send('update-badge', count);
+    } else if (count === 0 || (count === -1 && lastCount > 0)) {
+      // Title lost the count — might mean zero unreads
+      zeroStreak++;
+      if (zeroStreak >= ZERO_THRESHOLD && lastCount > 0) {
+        lastCount = 0;
+        ipcRenderer.send('update-badge', 0);
+      }
     }
   }
 
-  // Debounce DOM-triggered detection to avoid thrashing during page load
-  let detectTimeout = null;
-  function debouncedDetect() {
-    if (detectTimeout) return;
-    detectTimeout = setTimeout(() => {
-      detectTimeout = null;
-      detectUnreadCount();
-    }, 300);
-  }
-
-  // Watch for title element being added/replaced in head
+  // Watch for title element being added/replaced
   const headObserver = new MutationObserver(() => {
     observeTitle();
-    debouncedDetect();
+    detectFromTitle();
   });
-  headObserver.observe(document.head, { childList: true });
+  if (document.head) {
+    headObserver.observe(document.head, { childList: true });
+  }
 
-  // Watch for broad DOM changes (catches badge elements appearing/updating)
-  const bodyObserver = new MutationObserver(debouncedDetect);
-  const startBodyObserver = () => {
-    if (document.body) {
-      bodyObserver.observe(document.body, {
-        childList: true,
-        subtree: true,
-        characterData: true,
-      });
-    }
-  };
-
-  // Initial observation
   observeTitle();
-  startBodyObserver();
 
-  // Poll as fallback
-  setInterval(detectUnreadCount, 2000);
+  // Poll title as fallback
+  setInterval(detectFromTitle, 2000);
 
-  // Initial check
-  detectUnreadCount();
+  detectFromTitle();
 }
 
 // --- Expose limited API to renderer ---
@@ -213,8 +147,15 @@ contextBridge.exposeInMainWorld('messengerDesktop', {
 });
 
 // --- Initialize ---
-// Notification override must run ASAP, before Messenger's JS checks Notification API
-overrideNotifications();
+ipcRenderer.send('debug-log', { msg: 'preload init', readyState: document.readyState });
+
+// Notification override must run ASAP, but wrapped in try-catch so it never kills badge detection
+try {
+  overrideNotifications();
+  ipcRenderer.send('debug-log', { msg: 'overrideNotifications OK' });
+} catch (e) {
+  ipcRenderer.send('debug-log', { msg: 'overrideNotifications FAILED', error: e.message });
+}
 
 // Badge detection needs DOM ready
 if (document.readyState === 'loading') {

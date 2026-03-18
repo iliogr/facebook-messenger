@@ -16,6 +16,14 @@ const path = require('path');
 const fs = require('fs');
 const zlib = require('zlib');
 
+// Debug logging
+const DEBUG_LOG = path.join(require('os').homedir(), 'Desktop', 'messenger-debug.log');
+function debugLog(msg) { fs.appendFileSync(DEBUG_LOG, `${new Date().toISOString()} ${msg}\n`); }
+
+ipcMain.on('debug-log', (event, data) => {
+  debugLog(JSON.stringify(data));
+});
+
 // Keep references to prevent garbage collection
 let mainWindow = null;
 let mainView = null;
@@ -153,7 +161,7 @@ function validateWindowPosition(state) {
 }
 
 function saveWindowState() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!mainWindow || mainWindow.isDestroyed?.()) return;
   const bounds = mainWindow.getBounds();
   const isMaximized = mainWindow.isMaximized();
   const isFullScreen = mainWindow.isFullScreen();
@@ -270,6 +278,7 @@ function createWindow() {
     show: false,
   });
 
+  debugLog('[main] creating BrowserView');
   mainView = new BrowserView({
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -303,6 +312,102 @@ function createWindow() {
   }
   mainView.webContents.once('dom-ready', showOnce);
   setTimeout(showOnce, 5000); // fallback if dom-ready doesn't fire
+
+  // --- Unread detection via JS injection (bypasses contextIsolation) ---
+  let unreadPollInterval = null;
+
+  function startUnreadPoll() {
+    if (unreadPollInterval) clearInterval(unreadPollInterval);
+    unreadPollInterval = setInterval(async () => {
+      if (!mainView || mainView.webContents.isDestroyed()) {
+        clearInterval(unreadPollInterval);
+        unreadPollInterval = null;
+        return;
+      }
+      try {
+        const count = await mainView.webContents.executeJavaScript(`
+          (function() {
+            // Strategy 1: Title with count
+            var m = document.title.match(/\\((\\d+)\\)/);
+            if (m) return parseInt(m[1], 10);
+
+            // Strategy 2: aria-label with unread count
+            var els = document.querySelectorAll('[aria-label]');
+            for (var i = 0; i < els.length; i++) {
+              var label = els[i].getAttribute('aria-label');
+              if (!label) continue;
+              var um = label.match(/(\\d+)\\s*unread/i);
+              if (um) return parseInt(um[1], 10);
+            }
+
+            // Strategy 3: Count conversation rows with unread indicators
+            var rows = document.querySelectorAll('[role="row"], [role="listitem"], [data-testid*="mwthreadlist"]');
+            if (rows.length === 0) rows = document.querySelectorAll('a[href*="/t/"]');
+            var unreadCount = 0;
+            for (var j = 0; j < rows.length; j++) {
+              var spans = rows[j].querySelectorAll('span');
+              for (var k = 0; k < spans.length; k++) {
+                var fw = window.getComputedStyle(spans[k]).fontWeight;
+                if ((fw === 'bold' || fw === '700' || parseInt(fw) >= 700) && spans[k].textContent.trim().length > 0 && spans[k].textContent.trim().length < 60) {
+                  unreadCount++;
+                  break;
+                }
+              }
+            }
+            if (unreadCount > 0) return unreadCount;
+
+            // Strategy 4: Check for blue dots (unread indicators)
+            var chatList = document.querySelector('[role="navigation"]') || document.body;
+            var allEls = chatList.querySelectorAll('div, span');
+            var dotCount = 0;
+            for (var d = 0; d < allEls.length; d++) {
+              var rect = allEls[d].getBoundingClientRect();
+              if (rect.width >= 6 && rect.width <= 16 && rect.height >= 6 && rect.height <= 16 && Math.abs(rect.width - rect.height) < 2) {
+                var style = window.getComputedStyle(allEls[d]);
+                var br = parseFloat(style.borderRadius);
+                if (br >= rect.width / 2 - 1 || style.borderRadius === '50%') {
+                  var bg = style.backgroundColor;
+                  if (bg && (bg.includes('0, 132, 255') || bg.includes('0,132,255') || bg.includes('19, 111, 236') || bg.includes('0, 100, 224') || bg.includes('0, 153, 255') || bg.includes('0,153,255'))) {
+                    dotCount++;
+                  }
+                }
+              }
+            }
+            return dotCount;
+          })();
+        `);
+        if (typeof count === 'number') {
+          handleBadgeCount(count);
+        }
+      } catch (e) {
+        // Page may be navigating or destroyed
+      }
+    }, 3000);
+  }
+
+  mainView.webContents.on('dom-ready', startUnreadPoll);
+
+  // --- Favicon-based unread detection ---
+  // Messenger changes the favicon when there are unread messages
+  // The default favicon is a static .ico; unread favicon is typically a data: URL or different .ico
+  let baselineFavicon = null;
+  mainView.webContents.on('page-favicon-updated', (event, favicons) => {
+    const favicon = favicons[0] || '';
+    debugLog(`[favicon] ${favicon.substring(0, 120)}`);
+    if (!baselineFavicon) {
+      baselineFavicon = favicon;
+    }
+  });
+
+  // --- Title-based unread detection from main process ---
+  mainView.webContents.on('page-title-updated', (event, title) => {
+    debugLog(`[title] ${title}`);
+    const match = title.match(/\((\d+)\)/);
+    if (match) {
+      const count = parseInt(match[1], 10);
+      handleBadgeCount(count);
+    }
+  });
 
   // --- Permission Handling ---
 
@@ -396,7 +501,22 @@ function createWindow() {
     if (!isQuitting) {
       event.preventDefault();
       mainWindow.hide();
+    } else {
+      // Clean up interval before window is destroyed
+      if (unreadPollInterval) {
+        clearInterval(unreadPollInterval);
+        unreadPollInterval = null;
+      }
+      if (saveTimeout) {
+        clearTimeout(saveTimeout);
+        saveTimeout = null;
+      }
     }
+  });
+
+  mainWindow.on('closed', () => {
+    mainView = null;
+    mainWindow = null;
   });
 
   mainWindow.on('resize', debouncedSaveWindowState);
@@ -430,9 +550,12 @@ ipcMain.on('show-notification', (event, { title, body, icon }) => {
 });
 
 let lastBadgeCount = 0;
-ipcMain.on('update-badge', (event, count) => {
+function handleBadgeCount(count) {
   const prevCount = lastBadgeCount;
+  if (count === prevCount) return;
   lastBadgeCount = count;
+
+  debugLog(`[badge] setting badge count=${count} (prev=${prevCount})`);
 
   // macOS: dock badge
   if (app.dock) {
@@ -443,7 +566,6 @@ ipcMain.on('update-badge', (event, count) => {
   if (process.platform === 'win32' && mainWindow && !mainWindow.isDestroyed()) {
     if (count > 0) {
       mainWindow.setOverlayIcon(badgeIcon, `${count} unread messages`);
-      // Only flash when count increases (new messages), not on every update
       if (!mainWindow.isFocused() && count > prevCount) {
         mainWindow.flashFrame(true);
       }
@@ -452,6 +574,10 @@ ipcMain.on('update-badge', (event, count) => {
       mainWindow.flashFrame(false);
     }
   }
+}
+
+ipcMain.on('update-badge', (event, count) => {
+  handleBadgeCount(count);
 });
 
 ipcMain.on('find-in-page', (event, text) => {
@@ -699,12 +825,17 @@ if (!gotTheLock) {
   app.on('before-quit', (event) => {
     saveWindowState();
     if (!isQuitting) {
-      // Flush session data to disk before quitting so cookies/login persist
       isQuitting = true;
       event.preventDefault();
-      session.fromPartition('persist:messenger').flushStorageData().then(() => {
+      try {
+        session.fromPartition('persist:messenger').flushStorageData().then(() => {
+          app.quit();
+        }).catch(() => {
+          app.quit();
+        });
+      } catch (e) {
         app.quit();
-      });
+      }
       return;
     }
   });
