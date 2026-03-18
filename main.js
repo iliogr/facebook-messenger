@@ -545,7 +545,7 @@ ipcMain.on('show-notification', (event, { title, body, icon }) => {
 
 let lastBadgeCount = 0;
 let badgeZeroStreak = 0;
-const BADGE_ZERO_THRESHOLD = 5;
+const BADGE_ZERO_THRESHOLD = 2;
 
 function handleBadgeCount(count) {
   // Any non-zero reading resets the zero streak, even if count matches current badge.
